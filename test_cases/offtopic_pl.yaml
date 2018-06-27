@@ -1,0 +1,41 @@
+events:
+        PA:
+                type: m.room.power_levels
+                state_key: ''
+                sender: alice
+                content:
+                        users:
+                                alice: 100
+                                bob: 50
+        PB:
+                type: m.room.power_levels
+                state_key: ''
+                sender: bob
+                content:
+                        users:
+                                alice: 100
+                                bob: 50
+                                charlie: 50
+
+        PC:
+                type: m.room.power_levels
+                state_key: ''
+                sender: charlie
+                content:
+                        users:
+                                alice: 100
+                                bob: 50
+                                charlie: 0
+
+edges:
+        - [PC, PB, PA, START]
+        - [END, PA]
+        - [END, PC]
+
+auth:
+        PA: [IPOWER, IMA]
+        PB: [PA, IMB]
+        PC: [PB, IMC]
+
+expected_state:
+        - PC

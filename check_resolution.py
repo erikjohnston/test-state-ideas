@@ -72,27 +72,35 @@ INITIAL_EVENTS = {
         "sender": "charlie",
         "content": {"membership": Membership.JOIN},
     },
+    "IMZ": {
+        "type": EventTypes.Member,
+        "state_key": "zara",
+        "sender": "zara",
+        "content": {"membership": Membership.JOIN},
+    },
     "START": {
         "type": EventTypes.Message,
-        "sender": "alice",
+        "sender": "zara",
         "content": {},
     },
     "END": {
         "type": EventTypes.Message,
-        "sender": "charlie",
+        "sender": "zara",
         "content": {},
     },
 }
 
-EDGES = ["START", "IMC", "IMB", "IJR", "IPOWER", "IMA", "CREATE",]
+EDGES = ("START", "IMZ", "IMC", "IMB", "IJR", "IPOWER", "IMA", "CREATE",)
 AUTH_EVENTS = {
     "CREATE": [],
     "IMA": ["CREATE"],
     "IPOWER": ["CREATE", "IMA"],
     "IJR": ["CREATE", "IMA", "IPOWER"],
     "IMB": ["CREATE", "IJR", "IPOWER"],
-    "START": ["CREATE", "IMA", "IPOWER"],
-    "END": ["CREATE", "IMC", "IPOWER"],
+    "IMC": ["CREATE", "IJR", "IPOWER"],
+    "IMZ": ["CREATE", "IJR", "IPOWER"],
+    "START": ["CREATE", "IMZ", "IPOWER"],
+    "END": ["CREATE", "IMZ", "IPOWER"],
 }
 
 ROOM_ID = to_room_id("room")
@@ -126,6 +134,7 @@ def create_dag(graph_desc):
             for u, pl in event["content"].get("users", {}).items():
                 new_users[to_user_id(u)] = pl
 
+            event["content"] = dict(event["content"])
             event["content"]["users"] = new_users
 
         event["event_id"] = to_event_id(eid)
@@ -224,6 +233,7 @@ def render(graph_desc, render_auth_events):
 
     graph = Digraph()
     graph.attr(rankdir="TB")
+    graph.attr(concentrate="true")
 
     with graph.subgraph(name='cluster_main') as c:
         c.attr(color='red')
@@ -254,7 +264,8 @@ def render(graph_desc, render_auth_events):
         for start, end in auth_graph.edges:
             start = get_localpart_from_id(start)
             end = get_localpart_from_id(end)
-            graph.edge(start, end, color="blue", constraint="false", concentrate="true")
+            if end != "CREATE":
+                graph.edge(start, end, color="blue", constraint="false")
 
     print(graph.source)
 
@@ -265,8 +276,8 @@ if __name__ == "__main__":
     subparsers = parser.add_subparsers(dest="command")
 
     parser_resolve = subparsers.add_parser('resolve')
-    parser_resolve.add_argument("file", type=argparse.FileType('r'))
     parser_resolve.add_argument("resolver")
+    parser_resolve.add_argument("files", nargs='+', type=argparse.FileType('r'))
 
     parser_render = subparsers.add_parser('render')
     parser_render.add_argument("file", type=argparse.FileType('r'))
@@ -274,13 +285,16 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    graph_desc = yaml.load(args.file)
-
     if args.command == "resolve":
         module, func_name = args.resolver.rsplit(".", 1)
         module = importlib.import_module(module)
         resolver_func = getattr(module, func_name)
 
-        resolve(graph_desc, resolver_func)
+        for f in args.files:
+            graph_desc = yaml.load(f)
+
+            print("Resolving", f.name)
+            resolve(graph_desc, resolver_func)
     elif args.command == "render":
+        graph_desc = yaml.load(args.file)
         render(graph_desc, args.auth_events)

@@ -21,7 +21,7 @@ events:
                 content:
                         membership: ban
 
-        PC:
+        PB:
                 type: m.room.power_levels
                 state_key: ''
                 sender: bob
@@ -32,13 +32,13 @@ events:
 
 edges:
         - [END, MB, MA, PA, START]
-        - [END, PC, PA]
+        - [END, PB, PA]
 
 auth:
         PA: [IPOWER, IMA]
         MA: [PA, IMA, IJR]
-        MB: [PA, IMA, IJR]
-        PC: [PA, IMB]
+        MB: [PA, IMA, IMB, IJR]
+        PB: [PA, IMB]
 
 expected_state:
         - PA
