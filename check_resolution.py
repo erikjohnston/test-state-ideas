@@ -1,7 +1,6 @@
 import argparse
 import importlib
 import itertools
-import json
 import yaml
 
 from networkx import DiGraph, topological_sort
@@ -122,7 +121,10 @@ def create_dag(graph_desc):
 
     event_map = {}
 
-    for eid, event in itertools.chain(INITIAL_EVENTS.items(), graph_desc["events"].items()):
+    for eid, event in itertools.chain(
+        INITIAL_EVENTS.items(),
+        graph_desc["events"].items(),
+    ):
         event = dict(event)
         event["sender"] = to_user_id(event["sender"])
 
@@ -221,7 +223,10 @@ def resolve(graph_desc, resolution_func):
 
     if mismatches:
         print("Unexpected end state\n")
-        print(tabulate(mismatches, headers=["Type", "State Key", "Expected", "Got"]))
+        print(tabulate(
+            mismatches,
+            headers=["Type", "State Key", "Expected", "Got"],
+        ))
     else:
         print("Everything matched!")
 
@@ -277,7 +282,9 @@ if __name__ == "__main__":
 
     parser_resolve = subparsers.add_parser('resolve')
     parser_resolve.add_argument("resolver")
-    parser_resolve.add_argument("files", nargs='+', type=argparse.FileType('r'))
+    parser_resolve.add_argument(
+        "files", nargs='+', type=argparse.FileType('r'),
+    )
 
     parser_render = subparsers.add_parser('render')
     parser_render.add_argument("file", type=argparse.FileType('r'))
