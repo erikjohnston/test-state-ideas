@@ -4,6 +4,10 @@ Broadly speaking works by ordering all events that are different between the
 different states (and their auth chains) by ordering by power level, ensuring
 that their dependencies appear before them. This list is then iterated through
 and each event checkd if they still pass auth checks.
+
+
+Problem: for non auth events, e.g. topics, little ordering is imposed and so
+the algorithm doesn't necessarily pick the "latest" topic.
 """
 
 import itertools
