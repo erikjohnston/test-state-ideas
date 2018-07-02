@@ -1,3 +1,11 @@
+"""A prototype auth resolver that includes auth chains in its calculations.
+
+Broadly speaking works by ordering all events that are different between the
+different states (and their auth chains) by ordering by power level, ensuring
+that their dependencies appear before them. This list is then iterated through
+and each event checkd if they still pass auth checks.
+"""
+
 import itertools
 
 from synapse import event_auth
@@ -7,11 +15,26 @@ from synapse.state import _seperate
 
 
 def resolver(state_sets, event_map):
+    """Given a set of state return the resolved state.
+
+    Args:
+        state_sets(list[dict[tuple[str, str], str]]): A list of dicts from
+            type/state_key tuples to event_id
+        event_map(dict[str, FrozenEvent]): Map from event_id to event
+
+    Returns:
+        dict[tuple[str, str], str]: The resolved state map.
+    """
+
+    # First split up the un/conflicted state
     unconflicted_state, conflicted_state = _seperate(state_sets)
 
+    # Also fetch all auth events that appear in only some of the state sets'
+    # auth chains.
     auth_diff = _get_auth_chain_difference(state_sets, event_map)
-    # print (auth_diff)
 
+    # Now order the conflicted state and auth_diff by power level (falling
+    # back to event_id to tie break consistently).
     event_id_to_level = [
         (_get_power_level_for_sender(event_id, event_map), event_id)
         for event_id in set(itertools.chain(
@@ -19,13 +42,12 @@ def resolver(state_sets, event_map):
             auth_diff,
         ))
     ]
-
     event_id_to_level.sort()
-
-    # print(event_id_to_level)
 
     events_sorted_by_power = [eid for _, eid in event_id_to_level]
 
+    # Now we reorder the list to ensure that auth dependencies of an event
+    # appear before the event in the list
     sorted_events = []
 
     def add_to_list(event_id):
@@ -42,9 +64,9 @@ def resolver(state_sets, event_map):
         ev = events_sorted_by_power.pop()
         add_to_list(ev)
 
-    # print("Sorted_events:")
-    # print(" ", sorted_events)
-
+    # Now we go through the sorted events and auth each one in turn, using any
+    # previously successfully auth'ed events (falling back to their auth events
+    # if they don't exist)
     overridden_state = {}
     event_id_to_auth = {}
     for event_id in sorted_events:
@@ -57,7 +79,6 @@ def resolver(state_sets, event_map):
                 auth_events[key] = event_map[eid]
 
         try:
-            # print("Authing event", event_id, "with auth", auth_events)
             event_auth.check(
                 event, auth_events,
                 do_sig_check=False,
@@ -72,9 +93,8 @@ def resolver(state_sets, event_map):
 
     resolved_state = unconflicted_state
 
-    # print (event_id_to_auth)
-    # print (sorted_events)
-
+    # Now for each conflicted state type/state_key, pick the latest event tat
+    # has passed auth above, falling back to the first one if none passed auth.
     for key, conflicted_ids in conflicted_state.items():
         sorted_conflicts = []
         for eid in sorted_events:
@@ -82,8 +102,6 @@ def resolver(state_sets, event_map):
                 sorted_conflicts.append(eid)
 
         sorted_conflicts.reverse()
-
-        # print (key, sorted_conflicts)
 
         resolved_eid = sorted_conflicts[-1]
         for eid in sorted_conflicts:
@@ -97,6 +115,9 @@ def resolver(state_sets, event_map):
 
 
 def _get_power_level_for_sender(event_id, event_map):
+    """Return the power level of the sender of the given event according to
+    their auth events.
+    """
     event = event_map[event_id]
 
     for aid, _ in event.auth_events:
@@ -118,6 +139,9 @@ def _get_power_level_for_sender(event_id, event_map):
 
 
 def _get_auth_chain_difference(state_sets, event_map):
+    """Compare the auth chains of each state set and return the set of events
+    that only appear in some but not all of the auth chains.
+    """
     auth_sets = []
     for state_set in state_sets:
         auth_ids = set(
