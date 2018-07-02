@@ -15,7 +15,6 @@ import itertools
 from synapse import event_auth
 from synapse.api.constants import EventTypes
 from synapse.api.errors import AuthError
-from synapse.state import _seperate
 
 
 def resolver(state_sets, event_map):
@@ -107,13 +106,11 @@ def resolver(state_sets, event_map):
 
         sorted_conflicts.reverse()
 
-        resolved_eid = sorted_conflicts[-1]
         for eid in sorted_conflicts:
             if event_id_to_auth[eid]:
                 resolved_eid = eid
+                resolved_state[key] = resolved_eid
                 break
-
-        resolved_state[key] = resolved_eid
 
     return resolved_state
 
@@ -178,3 +175,21 @@ def _get_auth_chain_difference(state_sets, event_map):
     union = set().union(*auth_sets)
 
     return union - intersection
+
+
+def _seperate(state_sets):
+    """Return the unconflicted and conflicted state. This is different than in
+    the original algorithm, as this defines a key to be conflicted if one of
+    the state sets doesn't have that key.
+    """
+    unconflicted_state = {}
+    conflicted_state = {}
+
+    for key in set(itertools.chain.from_iterable(state_sets)):
+        event_ids = set(state_set.get(key) for state_set in state_sets)
+        if len(event_ids) == 1:
+            unconflicted_state[key] = event_ids.pop()
+        else:
+            conflicted_state[key] = set(eid for eid in event_ids if eid)
+
+    return unconflicted_state, conflicted_state

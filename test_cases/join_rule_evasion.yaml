@@ -1,0 +1,24 @@
+events:
+        JR:
+                type: m.room.join_rules
+                state_key: ''
+                sender: alice
+                content:
+                        join_rule: private
+        ME:
+                type: m.room.member
+                state_key: evelyn
+                sender: evelyn
+                content:
+                        membership: join
+
+edges:
+        - [END, JR, START]
+        - [END, ME, START]
+
+auth:
+        JR: [IPOWER, IMA, IJR]
+        ME: [IPOWER, ME, IJR]
+
+expected_state:
+        - JR

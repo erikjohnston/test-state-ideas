@@ -228,6 +228,7 @@ def resolve(graph_desc, resolution_func):
 
         state_past_event[eid] = state_ids
 
+    start_state = state_past_event[to_event_id("START")]
     end_state = state_past_event[to_event_id("END")]
 
     expected_state = {}
@@ -236,9 +237,14 @@ def resolve(graph_desc, resolution_func):
         expected_state[(ev.type, ev.state_key)] = to_event_id(eid)
 
     mismatches = []
-    for key, expected_id in expected_state.items():
-        if end_state[key] != expected_id:
-            mismatches.append((key[0], key[1], expected_id, end_state[key]))
+    for key in set(itertools.chain(end_state, expected_state)):
+        actual_id = end_state.get(key)
+        if actual_id == start_state.get(key):
+            continue
+
+        expected_id = expected_state.get(key)
+        if expected_id != actual_id:
+            mismatches.append((key[0], key[1], expected_id, actual_id))
 
     if mismatches:
         print("Unexpected end state\n")
