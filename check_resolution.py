@@ -1,3 +1,10 @@
+"""Program that interprets graph description yaml files.
+
+Currently supported modes:
+    render: outputs a dotfile of the graph
+    resolve: tests a given state resolution algorithm against the given graph
+"""
+
 import argparse
 import importlib
 import itertools
@@ -106,6 +113,13 @@ ROOM_ID = to_room_id("room")
 
 
 def create_dag(graph_desc):
+    """Takes a graph description and returns DiGraph's
+
+    Returns
+        (DiGraph, DiGraph, dict[str, FrozenEvent]): A tuple of room DAG, auth
+        DAG and event map.
+    """
+
     edge_map = {}
     auth_events = dict(AUTH_EVENTS)
 
@@ -170,6 +184,11 @@ def create_dag(graph_desc):
 
 
 def resolve(graph_desc, resolution_func):
+    """Given graph description and state resolution algorithm, compute the end
+    state of the graph and compare against the expected state defined in the
+    graph description
+    """
+
     graph, _, event_map = create_dag(graph_desc)
 
     state_past_event = {}
@@ -232,6 +251,13 @@ def resolve(graph_desc, resolution_func):
 
 
 def render(graph_desc, render_auth_events):
+    """Given graph description prints a dot file of the graph.
+
+    Args:
+        graph_desc (dict)
+        render_auth_events (bool): Whether to render the auth event relations
+            as edges
+    """
     event_graph, auth_graph, event_map = create_dag(graph_desc)
 
     from graphviz import Digraph
