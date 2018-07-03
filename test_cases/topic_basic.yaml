@@ -1,0 +1,59 @@
+events:
+        T1:
+                type: m.room.topic
+                state_key: ''
+                sender: alice
+
+        PA1:
+                type: m.room.power_levels
+                state_key: ''
+                sender: alice
+                content:
+                        users:
+                                alice: 100
+                                bob: 50
+
+        T2:
+                type: m.room.topic
+                state_key: ''
+                sender: alice
+
+        PA2:
+                type: m.room.power_levels
+                state_key: ''
+                sender: alice
+                content:
+                        users:
+                                alice: 100
+                                bob: 0
+
+        PB:
+                type: m.room.power_levels
+                state_key: ''
+                sender: bob
+                content:
+                        users:
+                                alice: 100
+                                bob: 50
+
+        T3:
+                type: m.room.topic
+                state_key: ''
+                sender: bob
+
+
+edges:
+        - [END, PA2, T2, PA1, T1, START]
+        - [END, T3, PB, PA1]
+
+auth:
+        T1: [IPOWER, IMA]
+        PA1: [IPOWER, IMA]
+        T2: [PA1, IMA]
+        PA2: [PA1, IMA]
+        PB: [PA1, IMB]
+        T3: [PB, IMB]
+
+expected_state:
+        - PA2
+        - T2

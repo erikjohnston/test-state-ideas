@@ -18,7 +18,7 @@ edges:
 
 auth:
         JR: [IPOWER, IMA, IJR]
-        ME: [IPOWER, ME, IJR]
+        ME: [IPOWER, IJR]
 
 expected_state:
         - JR

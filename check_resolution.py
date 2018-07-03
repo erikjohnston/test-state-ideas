@@ -203,7 +203,7 @@ def resolve(graph_desc, resolution_func):
         if len(prev_states) == 1:
             state_ids = prev_states[0]
         elif len(prev_states) > 1:
-            state_ids = resolver_func(
+            state_ids = resolution_func(
                 prev_states, event_map,
             )
 
@@ -238,11 +238,11 @@ def resolve(graph_desc, resolution_func):
 
     mismatches = []
     for key in set(itertools.chain(end_state, expected_state)):
+        expected_id = expected_state.get(key)
         actual_id = end_state.get(key)
-        if actual_id == start_state.get(key):
+        if actual_id == start_state.get(key) and not expected_id:
             continue
 
-        expected_id = expected_state.get(key)
         if expected_id != actual_id:
             mismatches.append((key[0], key[1], expected_id, actual_id))
 
@@ -256,13 +256,14 @@ def resolve(graph_desc, resolution_func):
         print("Everything matched!")
 
 
-def render(graph_desc, render_auth_events):
+def render(graph_desc, render_auth_events, prev_edges):
     """Given graph description prints a dot file of the graph.
 
     Args:
         graph_desc (dict)
         render_auth_events (bool): Whether to render the auth event relations
             as edges
+        prev_edges (bool): Whether to render prev event edges
     """
     event_graph, auth_graph, event_map = create_dag(graph_desc)
 
@@ -292,17 +293,22 @@ def render(graph_desc, render_auth_events):
             else:
                 graph.node(nid, **attrs)
 
-    for start, end in event_graph.edges:
-        start = get_localpart_from_id(start)
-        end = get_localpart_from_id(end)
-        graph.edge(start, end)
+    if prev_edges:
+        for start, end in event_graph.edges:
+            start = get_localpart_from_id(start)
+            end = get_localpart_from_id(end)
+            graph.edge(start, end)
 
     if render_auth_events:
         for start, end in auth_graph.edges:
             start = get_localpart_from_id(start)
             end = get_localpart_from_id(end)
             if end != "CREATE":
-                graph.edge(start, end, color="blue", constraint="false")
+                graph.edge(
+                    start, end,
+                    color="blue",
+                    constraint=str(not prev_edges),
+                )
 
     print(graph.source)
 
@@ -321,6 +327,11 @@ if __name__ == "__main__":
     parser_render = subparsers.add_parser('render')
     parser_render.add_argument("file", type=argparse.FileType('r'))
     parser_render.add_argument("-a", "--auth-events", action="store_true")
+    parser_render.add_argument(
+        "-e", "--no-prev-edges",
+        dest="prev_edges",
+        action="store_false",
+    )
 
     args = parser.parse_args()
 
@@ -336,4 +347,4 @@ if __name__ == "__main__":
             resolve(graph_desc, resolver_func)
     elif args.command == "render":
         graph_desc = yaml.load(args.file)
-        render(graph_desc, args.auth_events)
+        render(graph_desc, args.auth_events, args.prev_edges)

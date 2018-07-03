@@ -1,13 +1,14 @@
-"""A prototype auth resolver that includes auth chains in its calculations.
+"""This is similar to the auth_resolver, except it uses a concept called
+"mainline".
 
-Broadly speaking works by ordering all events that are different between the
-different states (and their auth chains) by ordering by power level, ensuring
-that their dependencies appear before them. This list is then iterated through
-and each event checkd if they still pass auth checks.
+This works by first resolving any events that would require power to send,
+e.g. power levels, bans, etc, as per the auth_resolver.
 
-
-Problem: for non auth events, e.g. topics, little ordering is imposed and so
-the algorithm doesn't necessarily pick the "latest" topic.
+This subset of resolved state and auth chain is then ordered topologically and
+used to order all the other events. For example, if there is a conflict between
+two topic events where one's auth event points to the current power level,
+while the other points to an older power level event, then the former is
+picked.
 """
 
 import itertools
@@ -63,9 +64,14 @@ def resolver(state_sets, event_map):
 
         sorted_events.append(event_id)
 
+    # First, lets pick out all the events that (probably) require power
+    leftover_events = []
     while events_sorted_by_power:
-        ev = events_sorted_by_power.pop()
-        add_to_list(ev)
+        event_id = events_sorted_by_power.pop()
+        if _is_power_event(event_map[event_id]):
+            add_to_list(event_id)
+        else:
+            leftover_events.append(event_id)
 
     # Now we go through the sorted events and auth each one in turn, using any
     # previously successfully auth'ed events (falling back to their auth events
@@ -94,9 +100,9 @@ def resolver(state_sets, event_map):
 
         event_id_to_auth[event_id] = allowed
 
-    resolved_state = unconflicted_state
+    resolved_state = {}
 
-    # Now for each conflicted state type/state_key, pick the latest event tat
+    # Now for each conflicted state type/state_key, pick the latest event that
     # has passed auth above, falling back to the first one if none passed auth.
     for key, conflicted_ids in conflicted_state.items():
         sorted_conflicts = []
@@ -111,6 +117,90 @@ def resolver(state_sets, event_map):
                 resolved_eid = eid
                 resolved_state[key] = resolved_eid
                 break
+
+    resolved_state.update(unconflicted_state)
+
+    # OK, so we've now resolved the power events. Now mainline them.
+    sorted_power_resolved = sorted(resolved_state.values())
+
+    mainline = []
+
+    def add_to_list_two(event_id):
+        ev = event_map[event_id]
+        for aid, _ in ev.auth_events:
+            if aid not in mainline:
+                add_to_list_two(aid)
+
+        if event_id not in mainline:
+            mainline.append(event_id)
+
+    while sorted_power_resolved:
+        ev_id = sorted_power_resolved.pop()
+        ev = event_map[ev_id]
+        if _is_auth_event((ev.type, ev.state_key)):
+            add_to_list_two(ev_id)
+
+    mainline_map = {ev_id: i + 1 for i, ev_id in enumerate(mainline)}
+
+    def get_mainline_depth(event_id):
+        if event_id in mainline_map:
+            return mainline_map[event_id]
+
+        ev = event_map[event_id]
+        if not ev.auth_events:
+            return 0
+
+        depth = max(
+            get_mainline_depth(aid)
+            for aid, _ in ev.auth_events
+        )
+
+        return depth
+
+    leftover_events_map = {
+        ev_id: get_mainline_depth(ev_id)
+        for ev_id in leftover_events
+    }
+
+    leftover_events.sort(key=lambda ev_id: (leftover_events_map[ev_id], ev_id))
+
+    for event_id in leftover_events:
+        event = event_map[event_id]
+        auth_events = {}
+        for aid, _ in event.auth_events:
+            aev = event_map[aid]
+            auth_events[(aev.type, aev.state_key)] = aev
+            for key, eid in overridden_state.items():
+                auth_events[key] = event_map[eid]
+
+        try:
+            event_auth.check(
+                event, auth_events,
+                do_sig_check=False,
+                do_size_check=False
+            )
+            allowed = True
+            overridden_state[(event.type, event.state_key)] = event_id
+        except AuthError:
+            allowed = False
+
+        event_id_to_auth[event_id] = allowed
+
+    for key, conflicted_ids in conflicted_state.items():
+        sorted_conflicts = []
+        for eid in leftover_events:
+            if eid in conflicted_ids:
+                sorted_conflicts.append(eid)
+
+        sorted_conflicts.reverse()
+
+        for eid in sorted_conflicts:
+            if event_id_to_auth[eid]:
+                resolved_eid = eid
+                resolved_state[key] = resolved_eid
+                break
+
+    resolved_state.update(unconflicted_state)
 
     return resolved_state
 
@@ -204,3 +294,18 @@ def _is_auth_event(key):
         (EventTypes.JoinRules, ""),
         (EventTypes.Create, ""),
     )
+
+
+def _is_power_event(event):
+    if (event.type, event.state_key) in (
+        (EventTypes.PowerLevels, ""),
+        (EventTypes.JoinRules, ""),
+        (EventTypes.Create, ""),
+    ):
+        return True
+
+    if event.type == EventTypes.Member:
+        if event.membership in ('leave', 'ban'):
+            return event.sender != event.state_key
+
+    return False
