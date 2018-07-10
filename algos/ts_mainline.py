@@ -1,17 +1,8 @@
-"""This is similar to the auth_resolver, except it uses a concept called
-"mainline".
-
-This works by first resolving any events that would require power to send,
-e.g. power levels, bans, etc, as per the auth_resolver.
-
-This subset of resolved state and auth chain is then ordered topologically and
-used to order all the other events. For example, if there is a conflict between
-two topic events where one's auth event points to the current power level,
-while the other points to an older power level event, then the former is
-picked.
 """
-
+TODO
+"""
 import itertools
+import networkx
 
 from synapse import event_auth
 from synapse.api.constants import EventTypes
@@ -37,48 +28,37 @@ def resolver(state_sets, event_map):
     # auth chains.
     auth_diff = _get_auth_chain_difference(state_sets, event_map)
 
-    # Now order the conflicted state and auth_diff by power level (falling
-    # back to event_id to tie break consistently).
-    event_id_to_level = [
-        (_get_power_level_for_sender(event_id, event_map), event_id)
-        for event_id in set(itertools.chain(
-            itertools.chain.from_iterable(conflicted_state.values()),
-            auth_diff,
-        ))
-    ]
-    event_id_to_level.sort()
+    full_conflicted_set = set(itertools.chain(
+        itertools.chain.from_iterable(conflicted_state.values()),
+        auth_diff,
+    ))
 
-    events_sorted_by_power = [eid for _, eid in event_id_to_level]
-
-    # Now we reorder the list to ensure that auth dependencies of an event
-    # appear before the event in the list
-    sorted_events = []
-
-    def add_to_list(event_id):
-        event = event_map[event_id]
-
-        for aid, _ in event.auth_events:
-            if aid in events_sorted_by_power:
-                events_sorted_by_power.remove(aid)
-                add_to_list(aid)
-
-        sorted_events.append(event_id)
-
-    # First, lets pick out all the events that (probably) require power
-    leftover_events = []
-    while events_sorted_by_power:
-        event_id = events_sorted_by_power.pop()
+    power_events_graph = networkx.DiGraph()
+    for event_id in full_conflicted_set:
         if _is_power_event(event_map[event_id]):
-            add_to_list(event_id)
-        else:
-            leftover_events.append(event_id)
+            _add_event_and_auth_chain_to_graph(
+                power_events_graph, event_id, event_map, auth_diff,
+            )
+
+    def _get_power_order(event_id):
+        ev = event_map[event_id]
+        pl = _get_power_level_for_sender(event_id, event_map)
+        # FIXME: we should be taking the reverse event_id
+        return pl, -ev.origin_server_ts, event_id
+
+    it = networkx.algorithms.dag.lexicographical_topological_sort(
+        power_events_graph,
+        key=_get_power_order,
+    )
+    sorted_power_events = list(it)
+    sorted_power_events.reverse()
 
     # Now we go through the sorted events and auth each one in turn, using any
     # previously successfully auth'ed events (falling back to their auth events
     # if they don't exist)
     overridden_state = {}
     event_id_to_auth = {}
-    for event_id in sorted_events:
+    for event_id in sorted_power_events:
         event = event_map[event_id]
         auth_events = {}
         for aid, _ in event.auth_events:
@@ -104,10 +84,10 @@ def resolver(state_sets, event_map):
 
     # Now for each conflicted state type/state_key, pick the latest event that
     # has passed auth above, falling back to the first one if none passed auth.
-    for key, conflicted_ids in conflicted_state.items():
+    for key, cids in conflicted_state.items():
         sorted_conflicts = []
-        for eid in sorted_events:
-            if eid in conflicted_ids:
+        for eid in sorted_power_events:
+            if eid in cids:
                 sorted_conflicts.append(eid)
 
         sorted_conflicts.reverse()
@@ -121,24 +101,19 @@ def resolver(state_sets, event_map):
     resolved_state.update(unconflicted_state)
 
     # OK, so we've now resolved the power events. Now mainline them.
-    sorted_power_resolved = sorted(resolved_state.values())
-
     mainline = []
+    pl = resolved_state.get((EventTypes.PowerLevels, ""), None)
+    while pl:
+        mainline.append(pl)
+        auth_events = event_map[pl].auth_events
+        pl = None
+        for aid, _ in auth_events:
+            ev = event_map[aid]
+            if (ev.type, ev.state_key) == (EventTypes.PowerLevels, ""):
+                pl = aid
+                break
 
-    def add_to_list_two(event_id):
-        ev = event_map[event_id]
-        for aid, _ in ev.auth_events:
-            if aid not in mainline and event_id_to_auth.get(aid, True):
-                add_to_list_two(aid)
-
-        if event_id not in mainline:
-            mainline.append(event_id)
-
-    while sorted_power_resolved:
-        ev_id = sorted_power_resolved.pop()
-        ev = event_map[ev_id]
-        if _is_power_event(ev):
-            add_to_list_two(ev_id)
+    mainline.reverse()
 
     mainline_map = {ev_id: i + 1 for i, ev_id in enumerate(mainline)}
 
@@ -159,8 +134,10 @@ def resolver(state_sets, event_map):
 
     leftover_events_map = {
         ev_id: get_mainline_depth(ev_id)
-        for ev_id in leftover_events
+        for ev_id in full_conflicted_set
+        if ev_id not in sorted_power_events
     }
+    leftover_events = list(leftover_events_map.keys())
 
     leftover_events.sort(key=lambda ev_id: (leftover_events_map[ev_id], ev_id))
 
@@ -213,10 +190,17 @@ def _get_power_level_for_sender(event_id, event_map):
 
     for aid, _ in event.auth_events:
         aev = event_map[aid]
-        if aev.type == EventTypes.PowerLevels:
+        if (aev.type, aev.state_key) == (EventTypes.PowerLevels, ""):
             pl = aev
             break
     else:
+        # Check if they're creator
+        for aid, _ in event.auth_events:
+            aev = event_map[aid]
+            if (aev.type, aev.state_key) == (EventTypes.Create, ""):
+                if aev.content.get("creator") == event.sender:
+                    return 100
+                break
         return 0
 
     level = pl.content.get("users", {}).get(event.sender)
@@ -309,3 +293,27 @@ def _is_power_event(event):
             return event.sender != event.state_key
 
     return False
+
+
+def window(seq, n=2):
+    "Returns a sliding window (of width n) over data from the iterable"
+    "   s -> (s0,s1,...s[n-1]), (s1,s2,...,sn), ...                   "
+    it = iter(seq)
+    result = tuple(itertools.islice(it, n))
+    if len(result) == n:
+        yield result
+    for elem in it:
+        result = result[1:] + (elem,)
+        yield result
+
+
+def _add_event_and_auth_chain_to_graph(graph, event_id, event_map, auth_diff):
+    graph.add_node(event_id)
+
+    state = [event_id]
+    while state:
+        eid = state.pop()
+        for aid, _ in event_map[event_id].auth_events:
+            if aid in auth_diff and aid not in graph:
+                graph.add_edge(eid, aid)
+                state.append(aid)

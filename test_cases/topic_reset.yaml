@@ -1,0 +1,42 @@
+events:
+        T1:
+                type: m.room.topic
+                state_key: ''
+                sender: alice
+
+        PA:
+                type: m.room.power_levels
+                state_key: ''
+                sender: alice
+                content:
+                        users:
+                                alice: 100
+                                bob: 50
+
+        T2:
+                type: m.room.topic
+                state_key: ''
+                sender: bob
+
+        MB:
+                type: m.room.member
+                state_key: bob
+                sender: alice
+                content:
+                        membership: ban
+
+
+edges:
+        - [END, MB, T2, PA, T1, START]
+        - [END, T1]
+
+auth:
+        T1: [IPOWER, IMA]
+        PA: [IPOWER, IMA]
+        T2: [PA, IMB]
+        MB: [PA, IMA]
+
+expected_state:
+        - T1
+        - MB
+        - PA

@@ -135,6 +135,8 @@ def create_dag(graph_desc):
 
     event_map = {}
 
+    current_origin_server_ts = 100
+
     for eid, event in itertools.chain(
         INITIAL_EVENTS.items(),
         graph_desc["events"].items(),
@@ -163,6 +165,8 @@ def create_dag(graph_desc):
         event["room_id"] = ROOM_ID
 
         event["depth"] = 0
+        event["origin_server_ts"] = current_origin_server_ts
+        current_origin_server_ts += 1
 
         event_map[to_event_id(eid)] = FrozenEvent(event)
 
