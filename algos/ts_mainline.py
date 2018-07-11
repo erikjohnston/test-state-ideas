@@ -33,151 +33,34 @@ def resolver(state_sets, event_map):
         auth_diff,
     ))
 
-    power_events_graph = networkx.DiGraph()
-    for event_id in full_conflicted_set:
-        if _is_power_event(event_map[event_id]):
-            _add_event_and_auth_chain_to_graph(
-                power_events_graph, event_id, event_map, auth_diff,
-            )
-
-    def _get_power_order(event_id):
-        ev = event_map[event_id]
-        pl = _get_power_level_for_sender(event_id, event_map)
-        # FIXME: we should be taking the reverse event_id
-        return pl, -ev.origin_server_ts, event_id
-
-    it = networkx.algorithms.dag.lexicographical_topological_sort(
-        power_events_graph,
-        key=_get_power_order,
+    power_events = (
+        eid for eid in full_conflicted_set
+        if _is_power_event(event_map[eid])
     )
-    sorted_power_events = list(it)
-    sorted_power_events.reverse()
+    sorted_power_events = _reverse_topological_power_sort(
+        power_events,
+        event_map,
+        auth_diff
+    )
 
-    # Now we go through the sorted events and auth each one in turn, using any
-    # previously successfully auth'ed events (falling back to their auth events
-    # if they don't exist)
-    overridden_state = {}
-    event_id_to_auth = {}
-    for event_id in sorted_power_events:
-        event = event_map[event_id]
-        auth_events = {}
-        for aid, _ in event.auth_events:
-            aev = event_map[aid]
-            auth_events[(aev.type, aev.state_key)] = aev
-            for key, eid in overridden_state.items():
-                auth_events[key] = event_map[eid]
-
-        try:
-            event_auth.check(
-                event, auth_events,
-                do_sig_check=False,
-                do_size_check=False
-            )
-            allowed = True
-            overridden_state[(event.type, event.state_key)] = event_id
-        except AuthError:
-            allowed = False
-
-        event_id_to_auth[event_id] = allowed
-
-    resolved_state = {}
-
-    # Now for each conflicted state type/state_key, pick the latest event that
-    # has passed auth above, falling back to the first one if none passed auth.
-    for key, cids in conflicted_state.items():
-        sorted_conflicts = []
-        for eid in sorted_power_events:
-            if eid in cids:
-                sorted_conflicts.append(eid)
-
-        sorted_conflicts.reverse()
-
-        for eid in sorted_conflicts:
-            if event_id_to_auth[eid]:
-                resolved_eid = eid
-                resolved_state[key] = resolved_eid
-                break
-
-    resolved_state.update(unconflicted_state)
+    resolved_state = _iterative_auth_checks(
+        sorted_power_events, unconflicted_state, event_map,
+    )
 
     # OK, so we've now resolved the power events. Now mainline them.
-    mainline = []
+
     pl = resolved_state.get((EventTypes.PowerLevels, ""), None)
-    while pl:
-        mainline.append(pl)
-        auth_events = event_map[pl].auth_events
-        pl = None
-        for aid, _ in auth_events:
-            ev = event_map[aid]
-            if (ev.type, ev.state_key) == (EventTypes.PowerLevels, ""):
-                pl = aid
-                break
-
-    mainline.reverse()
-
-    mainline_map = {ev_id: i + 1 for i, ev_id in enumerate(mainline)}
-
-    def get_mainline_depth(event_id):
-        if event_id in mainline_map:
-            return mainline_map[event_id]
-
-        ev = event_map[event_id]
-        if not ev.auth_events:
-            return 0
-
-        depth = max(
-            get_mainline_depth(aid)
-            for aid, _ in ev.auth_events
-        )
-
-        return depth
-
-    leftover_events_map = {
-        ev_id: get_mainline_depth(ev_id)
+    leftover_events = (
+        ev_id
         for ev_id in full_conflicted_set
         if ev_id not in sorted_power_events
-    }
-    leftover_events = list(leftover_events_map.keys())
+    )
 
-    leftover_events.sort(key=lambda ev_id: (leftover_events_map[ev_id], ev_id))
+    leftover_events = _mainline_sort(leftover_events, pl, event_map)
 
-    for event_id in leftover_events:
-        event = event_map[event_id]
-        auth_events = {}
-        for aid, _ in event.auth_events:
-            aev = event_map[aid]
-            auth_events[(aev.type, aev.state_key)] = aev
-            for key, eid in overridden_state.items():
-                auth_events[key] = event_map[eid]
-
-        try:
-            event_auth.check(
-                event, auth_events,
-                do_sig_check=False,
-                do_size_check=False
-            )
-            allowed = True
-            overridden_state[(event.type, event.state_key)] = event_id
-        except AuthError:
-            allowed = False
-
-        event_id_to_auth[event_id] = allowed
-
-    for key, conflicted_ids in conflicted_state.items():
-        sorted_conflicts = []
-        for eid in leftover_events:
-            if eid in conflicted_ids:
-                sorted_conflicts.append(eid)
-
-        sorted_conflicts.reverse()
-
-        for eid in sorted_conflicts:
-            if event_id_to_auth[eid]:
-                resolved_eid = eid
-                resolved_state[key] = resolved_eid
-                break
-
-    resolved_state.update(unconflicted_state)
+    resolved_state = _iterative_auth_checks(
+        leftover_events, resolved_state, event_map,
+    )
 
     return resolved_state
 
@@ -317,3 +200,102 @@ def _add_event_and_auth_chain_to_graph(graph, event_id, event_map, auth_diff):
             if aid in auth_diff and aid not in graph:
                 graph.add_edge(eid, aid)
                 state.append(aid)
+
+
+def _reverse_topological_power_sort(event_ids, event_map, auth_diff):
+    graph = networkx.DiGraph()
+    for event_id in event_ids:
+        _add_event_and_auth_chain_to_graph(
+            graph, event_id, event_map, auth_diff,
+        )
+
+    def _get_power_order(event_id):
+        ev = event_map[event_id]
+        pl = _get_power_level_for_sender(event_id, event_map)
+        # FIXME: we should be taking the reverse event_id
+        return pl, -ev.origin_server_ts, event_id
+
+    it = networkx.algorithms.dag.lexicographical_topological_sort(
+        graph,
+        key=_get_power_order,
+    )
+    sorted_events = list(it)
+    sorted_events.reverse()
+
+    return sorted_events
+
+
+def _iterative_auth_checks(event_ids, base_state, event_map):
+    resolved_state = base_state.copy()
+
+    for event_id in event_ids:
+        event = event_map[event_id]
+
+        auth_events = {
+            (event_map[aid].type, event_map[aid].state_key): event_map[aid]
+            for aid, _ in event.auth_events
+        }
+        for key in event_auth.auth_types_for_event(event):
+            if key in resolved_state:
+                auth_events[key] = event_map[resolved_state[key]]
+
+        try:
+            event_auth.check(
+                event, auth_events,
+                do_sig_check=False,
+                do_size_check=False
+            )
+
+            resolved_state[(event.type, event.state_key)] = event_id
+        except AuthError:
+            pass
+
+    return resolved_state
+
+
+def _mainline_sort(event_ids, resolved_power_event_id, event_map):
+    mainline = []
+    pl = resolved_power_event_id
+    while pl:
+        mainline.append(pl)
+        auth_events = event_map[pl].auth_events
+        pl = None
+        for aid, _ in auth_events:
+            ev = event_map[aid]
+            if (ev.type, ev.state_key) == (EventTypes.PowerLevels, ""):
+                pl = aid
+                break
+
+    mainline.reverse()
+
+    mainline_map = {ev_id: i + 1 for i, ev_id in enumerate(mainline)}
+
+    def get_mainline_depth(event_id):
+        if event_id in mainline_map:
+            return mainline_map[event_id]
+
+        ev = event_map[event_id]
+        if not ev.auth_events:
+            return 0
+
+        depth = max(
+            get_mainline_depth(aid)
+            for aid, _ in ev.auth_events
+        )
+
+        return depth
+
+    event_ids = list(event_ids)
+
+    order_map = {
+        ev_id: (
+            get_mainline_depth(ev_id),
+            event_map[ev_id].origin_server_ts,
+            ev_id,
+        )
+        for ev_id in event_ids
+    }
+
+    event_ids.sort(key=lambda ev_id: order_map[ev_id])
+
+    return event_ids
