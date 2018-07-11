@@ -115,16 +115,23 @@ def _get_auth_chain_difference(state_sets, event_map):
             )
         )
 
+        to_check = auth_ids
+
         while True:
-            added = False
-            for aid in set(auth_ids):
-                to_add = set(eid for eid, _ in event_map[aid].auth_events)
-                if to_add - auth_ids:
-                    added = True
+            added = set()
+            for aid in set(to_check):
+                to_add = [
+                    eid for eid, _ in event_map[aid].auth_events
+                    if eid not in auth_ids
+                ]
+                if to_add:
+                    added.update(to_add)
                     auth_ids.update(to_add)
 
             if not added:
                 break
+
+            to_check = added
 
         auth_sets.append(auth_ids)
 
@@ -212,15 +219,14 @@ def _reverse_topological_power_sort(event_ids, event_map, auth_diff):
     def _get_power_order(event_id):
         ev = event_map[event_id]
         pl = _get_power_level_for_sender(event_id, event_map)
-        # FIXME: we should be taking the reverse event_id
-        return pl, -ev.origin_server_ts, event_id
+
+        return -pl, ev.origin_server_ts, event_id
 
     it = networkx.algorithms.dag.lexicographical_topological_sort(
         graph,
         key=_get_power_order,
     )
     sorted_events = list(it)
-    sorted_events.reverse()
 
     return sorted_events
 
@@ -266,30 +272,24 @@ def _mainline_sort(event_ids, resolved_power_event_id, event_map):
                 pl = aid
                 break
 
-    mainline.reverse()
+    mainline_map = {ev_id: i + 1 for i, ev_id in enumerate(reversed(mainline))}
 
-    mainline_map = {ev_id: i + 1 for i, ev_id in enumerate(mainline)}
+    def get_mainline_depth(event):
+        if event.event_id in mainline_map:
+            return mainline_map[event.event_id]
 
-    def get_mainline_depth(event_id):
-        if event_id in mainline_map:
-            return mainline_map[event_id]
+        for aid, _ in event.auth_events:
+            aev = event_map[aid]
+            if (aev.type, aev.state_key) == (EventTypes.PowerLevels, ""):
+                return get_mainline_depth(aev) + 1
 
-        ev = event_map[event_id]
-        if not ev.auth_events:
-            return 0
-
-        depth = max(
-            get_mainline_depth(aid)
-            for aid, _ in ev.auth_events
-        )
-
-        return depth
+        return 0
 
     event_ids = list(event_ids)
 
     order_map = {
         ev_id: (
-            get_mainline_depth(ev_id),
+            get_mainline_depth(event_map[ev_id]),
             event_map[ev_id].origin_server_ts,
             ev_id,
         )
