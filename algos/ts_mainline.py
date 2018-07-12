@@ -1,5 +1,5 @@
-"""
-TODO
+"""This is an example implementation of state resolution using power and
+mainline ordering.
 """
 import itertools
 import networkx
@@ -33,6 +33,7 @@ def resolver(state_sets, event_map):
         auth_diff,
     ))
 
+    # Get and sort all the power events (kicks/bans/etc)
     power_events = (
         eid for eid in full_conflicted_set
         if _is_power_event(event_map[eid])
@@ -43,24 +44,29 @@ def resolver(state_sets, event_map):
         auth_diff
     )
 
+    # Now sequentially auth each one
     resolved_state = _iterative_auth_checks(
         sorted_power_events, unconflicted_state, event_map,
     )
 
-    # OK, so we've now resolved the power events. Now mainline them.
+    # OK, so we've now resolved the power events. Now sort the remaining
+    # events using the mainline of the resolved power level.
 
-    pl = resolved_state.get((EventTypes.PowerLevels, ""), None)
     leftover_events = (
         ev_id
         for ev_id in full_conflicted_set
         if ev_id not in sorted_power_events
     )
 
+    pl = resolved_state.get((EventTypes.PowerLevels, ""), None)
     leftover_events = _mainline_sort(leftover_events, pl, event_map)
 
     resolved_state = _iterative_auth_checks(
         leftover_events, resolved_state, event_map,
     )
+
+    # We make sure that unconflicted state always still applies.
+    resolved_state.update(unconflicted_state)
 
     return resolved_state
 
@@ -159,18 +165,9 @@ def _seperate(state_sets):
     return unconflicted_state, conflicted_state
 
 
-def _is_auth_event(key):
-    if key[0] in (EventTypes.Member, EventTypes.ThirdPartyInvite):
-        return True
-
-    return key in (
-        (EventTypes.PowerLevels, ""),
-        (EventTypes.JoinRules, ""),
-        (EventTypes.Create, ""),
-    )
-
-
 def _is_power_event(event):
+    """Return whether or not the event is a "power event"
+    """
     if (event.type, event.state_key) in (
         (EventTypes.PowerLevels, ""),
         (EventTypes.JoinRules, ""),
@@ -185,19 +182,10 @@ def _is_power_event(event):
     return False
 
 
-def window(seq, n=2):
-    "Returns a sliding window (of width n) over data from the iterable"
-    "   s -> (s0,s1,...s[n-1]), (s1,s2,...,sn), ...                   "
-    it = iter(seq)
-    result = tuple(itertools.islice(it, n))
-    if len(result) == n:
-        yield result
-    for elem in it:
-        result = result[1:] + (elem,)
-        yield result
-
-
 def _add_event_and_auth_chain_to_graph(graph, event_id, event_map, auth_diff):
+    """Helper function for _reverse_topological_power_sort that add the event
+    and its auth chain (that is in the auth diff) to the graph
+    """
     graph.add_node(event_id)
 
     state = [event_id]
@@ -210,6 +198,10 @@ def _add_event_and_auth_chain_to_graph(graph, event_id, event_map, auth_diff):
 
 
 def _reverse_topological_power_sort(event_ids, event_map, auth_diff):
+    """Returns a list of the event_ids sorted by reverse topological ordering,
+    and then by power level and origin_server_ts
+    """
+
     graph = networkx.DiGraph()
     for event_id in event_ids:
         _add_event_and_auth_chain_to_graph(
@@ -232,6 +224,9 @@ def _reverse_topological_power_sort(event_ids, event_map, auth_diff):
 
 
 def _iterative_auth_checks(event_ids, base_state, event_map):
+    """Sequentially apply auth checks to each event in given list, updating the
+    state as it goes along.
+    """
     resolved_state = base_state.copy()
 
     for event_id in event_ids:
@@ -260,6 +255,9 @@ def _iterative_auth_checks(event_ids, base_state, event_map):
 
 
 def _mainline_sort(event_ids, resolved_power_event_id, event_map):
+    """Returns a sorted list of event_ids sorted by mainline ordering based on
+    the given event resolved_power_event_id
+    """
     mainline = []
     pl = resolved_power_event_id
     while pl:
