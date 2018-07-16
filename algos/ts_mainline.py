@@ -192,9 +192,12 @@ def _add_event_and_auth_chain_to_graph(graph, event_id, event_map, auth_diff):
     while state:
         eid = state.pop()
         for aid, _ in event_map[event_id].auth_events:
-            if aid in auth_diff and aid not in graph:
-                graph.add_edge(eid, aid)
-                state.append(aid)
+            if aid in auth_diff:
+                # We add the reverse edge because we want to do reverse
+                # topological ordering
+                graph.add_edge(aid, eid)
+                if aid not in graph:
+                    state.append(aid)
 
 
 def _reverse_topological_power_sort(event_ids, event_map, auth_diff):
