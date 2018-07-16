@@ -4,9 +4,12 @@ mainline ordering.
 import itertools
 import networkx
 
-from synapse import event_auth
+from synapse import event_auth, events
 from synapse.api.constants import EventTypes
 from synapse.api.errors import AuthError
+
+
+events.USE_FROZEN_DICTS = False
 
 
 def resolver(state_sets, event_map):
@@ -106,19 +109,23 @@ def _get_auth_chain_difference(state_sets, event_map):
     """Compare the auth chains of each state set and return the set of events
     that only appear in some but not all of the auth chains.
     """
+    common = set(state_sets[0].values()).intersection(
+        *(s.values() for s in state_sets[1:])
+    )
+
     auth_sets = []
     for state_set in state_sets:
         auth_ids = set(
             eid
             for key, eid in state_set.items()
-            if key[0] in (
+            if (key[0] in (
                  EventTypes.Member,
                  EventTypes.ThirdPartyInvite,
             ) or key in (
                 (EventTypes.PowerLevels, ''),
                 (EventTypes.Create, ''),
                 (EventTypes.JoinRules, ''),
-            )
+            )) and eid not in common
         )
 
         to_check = auth_ids
@@ -129,6 +136,7 @@ def _get_auth_chain_difference(state_sets, event_map):
                 to_add = [
                     eid for eid, _ in event_map[aid].auth_events
                     if eid not in auth_ids
+                    and eid not in common
                 ]
                 if to_add:
                     added.update(to_add)
@@ -160,7 +168,8 @@ def _seperate(state_sets):
         if len(event_ids) == 1:
             unconflicted_state[key] = event_ids.pop()
         else:
-            conflicted_state[key] = set(eid for eid in event_ids if eid)
+            event_ids.discard(None)
+            conflicted_state[key] = event_ids
 
     return unconflicted_state, conflicted_state
 
